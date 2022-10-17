@@ -10,8 +10,11 @@ import igraph as ig
 from itertools import product, combinations
 import networkx as nx
 import matplotlib.pyplot as plt
+import joblib
+from joblib import Parallel, delayed
 import sys
-sys.path.append('/home/thejasvi/Documents/research_repos/pydatemm/ky2013')
+#sys.path.append('/home/thejasvi/Documents/research_repos/pydatemm/ky2013')
+sys.path.append("C:/Users/theja/Documents/research_repos/pydatemm/ky2013")
 import build_ccg as bccg
 from build_ccg import make_fundamental_loops, make_triple_pairs
 from pydatemm.timediffestim import generate_multich_crosscorr, get_multich_tdoas
@@ -103,7 +106,16 @@ def node_names(ind_tup,X):
     
     
 def ig_check_for_one_common_edge(X,Y):
-
+    '''
+    Parameters
+    ----------
+    X,Y : ig.Graph
+    Returns 
+    -------
+    int : (-1,0,1)
+        -1 indicates incompatibility, 1 - compatibility and 0 indicates
+        NA
+    '''
     X_edge_weights = [ (node_names(i.tuple, X), i['tde']) for i in X.es]
     Y_edge_weights = [ (node_names(i.tuple, Y), i['tde']) for i in Y.es]
     common_edge = set(Y_edge_weights).intersection(set(X_edge_weights))
@@ -111,7 +123,6 @@ def ig_check_for_one_common_edge(X,Y):
         return 1
     else:
         return -1
-
 
 def ig_ccg_definer(X,Y):
     common_nodes = set(X.vs['node']).intersection(set(Y.vs['node']))
@@ -143,6 +154,33 @@ def ig_make_ccg_matrix(cfls):
     return ccg
 
 
+def ig_get_compatibility(cfls, ij_combis):
+    output = []
+    for (i,j) in ij_combis:
+        trip1, trip2  = cfls[i], cfls[j]
+        cc_out = ig_ccg_definer(trip1, trip2)
+        output.append(cc_out)
+    return output
+
+
+
+def ig_make_ccg_pll(cfls, **kwargs):
+    '''Parallel version of make_ccg_matrix'''
+    num_cores = kwargs.get('num_cores', joblib.cpu_count())
+    num_cfls = len(cfls)
+
+    all_ij = list(combinations(range(num_cfls), 2))
+    cfl_ij_parts = [all_ij[i::num_cores] for i in range(num_cores)]
+    compatibility = Parallel(n_jobs=num_cores)(delayed(ig_get_compatibility)(cfls, ij_parts)for ij_parts in cfl_ij_parts)
+    ccg = np.zeros((num_cfls, num_cfls), dtype='int32')
+    for (ij_parts, compat_ijparts) in zip(cfl_ij_parts, compatibility):
+        for (i,j), (comp_val) in zip(ij_parts, compat_ijparts):
+            ccg[i,j] = comp_val
+    # make symmetric
+    ccg += ccg.T
+    return ccg
+
+
 if __name__ == "__main__":
    
     nruns = 100
@@ -164,35 +202,39 @@ if __name__ == "__main__":
     print(f'{ns_time()/1e9 - a} s')
 
     #%%
-    sta = ns_time()/1e9
-    nx_ccg = bccg.make_ccg_matrix(cfls_from_tdes)
+    # sta = ns_time()/1e9
+    # nx_ccg = bccg.make_ccg_matrix(cfls_from_tdes)
     print(f'NX: {ns_time()/1e9 - sta} s'); sta = ns_time()/1e9
     ig_ccg = ig_make_ccg_matrix(ig_cfls_from_tdes)
     print(f'IG: {ns_time()/1e9 - sta} s')
-    try:
-        assert np.all(ig_ccg==nx_ccg)
-    except:
-        noteq = np.argwhere(ig_ccg!=nx_ccg)
-        X, Y = [ig_cfls_from_tdes[i] for i in noteq[0,:]]
-        X, Y = [cfls_from_tdes[i] for i in noteq[0,:]]
+    # try:
+    #     assert np.all(ig_ccg==nx_ccg)
+    # except:
+    #     noteq = np.argwhere(ig_ccg!=nx_ccg)
+    #     X, Y = [ig_cfls_from_tdes[i] for i in noteq[0,:]]
+    #     X, Y = [cfls_from_tdes[i] for i in noteq[0,:]]
 
     #%% 
     # Comparing nx and ig outputs 
-    for nx_out, ig_out  in zip(cfls_from_tdes, ig_cfls_from_tdes):
-        nx_tde = nx.adjacency_matrix(nx_out, weight='tde').todense()
-        ig_tde = np.array(ig_out.get_adjacency(attribute='tde').data)
+    # for nx_out, ig_out  in zip(cfls_from_tdes, ig_cfls_from_tdes):
+    #     nx_tde = nx.adjacency_matrix(nx_out, weight='tde').todense()
+    #     ig_tde = np.array(ig_out.get_adjacency(attribute='tde').data)
         
-        nx_weights = nx.get_edge_attributes(nx_out,'tde')
-        for edge in ig_out.es:
-            b,a = edge.tuple
-            node_b, node_a = ig_out.vs['node'][b], ig_out.vs['node'][a]
-            try:
-                assert edge['tde'] == nx_weights[(node_b, node_a)]
-            except:
-                assert edge['tde'] == nx_weights[(node_a, node_b)]
+    #     nx_weights = nx.get_edge_attributes(nx_out,'tde')
+    #     for edge in ig_out.es:
+    #         b,a = edge.tuple
+    #         node_b, node_a = ig_out.vs['node'][b], ig_out.vs['node'][a]
+    #         try:
+    #             assert edge['tde'] == nx_weights[(node_b, node_a)]
+    #         except:
+    #             assert edge['tde'] == nx_weights[(node_a, node_b)]
 
-        
-        
+    #%%
+    sta = ns_time()/1e9
+    ii = ig_make_ccg_pll(ig_cfls_from_tdes, **kwargs)
+    sto = ns_time()/1e9; print(f'{sto-sta} s')   
+    # jj = bccg.make_ccg_pll(cfls_from_tdes, **kwargs)
+    # print(f'{ns_time()/1e9-sta} s')
     #%%
     g = ig_cfls_from_tdes[-1]
     plt.figure()
